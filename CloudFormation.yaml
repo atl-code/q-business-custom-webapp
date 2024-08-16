@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "CloudFormation for the Custom UI of QBusiness"
 Parameters:
-  LatestAmiId:
+  LatestAMIID:
     Description: EC2 machine image
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
     Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
@@ -16,9 +16,9 @@ Parameters:
   QApplicationId:
     Type: String
     Description: Q Application Id
-  IdcApplicationArn:
+  IdCApplicationARN:
     Type: String
-    Description: Identity Center customer application ARN.
+    Description: IAM Identity Center customer application ARN.
     Default: ""
 
   VpcCIDR:
@@ -122,6 +122,10 @@ Resources:
         - IpProtocol: tcp
           FromPort: 8501
           ToPort: 8501
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic
+          IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
 
   QManagedPolicy:
@@ -232,7 +236,7 @@ Resources:
           "AmazonQAppId": "${QApplicationId}",
           "IamRoleArn": "${QServiceRole.Arn}",
           "Region": "${AWS::Region}",
-          "IdcApplicationArn": "${IdcApplicationArn}",
+          "IdcApplicationArn": "${IdCApplicationARN}",
           "OAuthConfig": {
             "ClientId": "${UserPoolClient}",
             "ExternalDns": "${LowerCaseFqdn.Output}",
@@ -360,7 +364,7 @@ Resources:
             Groups:
               - !Ref SecurityGroup
         EbsOptimized: true
-        ImageId: !Ref "LatestAmiId"
+        ImageId: !Ref "LatestAMIID"
         InstanceType: t3.micro
         IamInstanceProfile:
           Arn: !GetAtt EC2InstanceProfile.Arn
@@ -406,8 +410,8 @@ Resources:
             systemctl enable aws-appconfig-agent
             systemctl restart aws-appconfig-agent
             cd /opt
-            git clone https://github.com/mohsinidrees2817/custom-web-experience-with-amazon-q-business.git
-            cd custom-web-experience-with-amazon-q-business/
+            git clone https://github.com/atl-code/q-business-custom-webapp.git
+            cd q-business-custom-webapp/
             pip3.11 install virtualenv
             python3.11 -m virtualenv venv
             venv/bin/pip install -r requirements.txt
@@ -434,10 +438,6 @@ Resources:
 
   UserPool:
     Type: AWS::Cognito::UserPool
-    Metadata:
-      guard:
-        SuppressedRules:
-          - COGNITO_USER_POOL_MFA_CONFIGURATION_RULE # Not required for the demo
     Properties:
       UserPoolName: !Sub ${AuthName}-user-pool
       AutoVerifiedAttributes:
