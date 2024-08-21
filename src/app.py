@@ -21,7 +21,7 @@ st.title("Amazon Q Business Custom UI") #page title
 
 # Define a function to clear the chat history
 def clear_chat_history():
-    st.session_state.messages = [{"role": "assistant", "content": "How may I assist you today?"}]
+    st.session_state.messages = []
     st.session_state.questions = []
     st.session_state.answers = []
     st.session_state.input = ""
@@ -121,6 +121,13 @@ else:
     if "input" not in st.session_state:
         st.session_state.input = ""
 
+    # This block is for first run, Write out welcome messages
+    st.subheader("Ask Natural Language Questions Against IRS Form 1040 Instructions Guide:")
+    st.write("Suggested Topics:")
+    st.write("1. If I plan to move after filing my tax return, What should i File?")
+    st.write("2. If my Filing Status is Single and i am under 65, what is the gross income limit?")
+    st.write("3. How Should I Report Digital Asset Transactions?")
+    st.write("4. Explain Line 6c to me")
 
     # Display the chat messages
     for message in st.session_state.messages:
