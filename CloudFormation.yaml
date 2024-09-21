@@ -1,13 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "CloudFormation for the Custom UI of QBusiness"
 Parameters:
-  LatestAMIID:
+  LatestAmiId:
     Description: EC2 machine image
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
     Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
   CertificateARN:
     Description: Certificate that needs to be added to the Load Balancer
     Type: String
+    Default: ""
   AuthName:
     Type: String
     Description: Unique Auth Name for Cognito Resources
@@ -16,9 +17,9 @@ Parameters:
   QApplicationId:
     Type: String
     Description: Q Application Id
-  IdCApplicationARN:
+  IdcApplicationArn:
     Type: String
-    Description: IAM Identity Center customer application ARN.
+    Description: Identity Center customer application ARN.
     Default: ""
 
   VpcCIDR:
@@ -46,6 +47,37 @@ Resources:
         - Key: Name
           Value: VpcId
 
+  VPCFlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VPCFlowLogPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:log-group:/aws/vpc/flowlogs/*
+
+  VPCFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref VpcId
+      ResourceType: VPC
+      TrafficType: ALL # We can specify ALL, ACCEPT, or REJECT depending on the traffic to log
+      LogDestinationType: cloud-watch-logs # we can choose between cloud-watch-logs or s3
+      LogGroupName: !Sub /aws/vpc/flowlogs/${AWS::StackName}
+      DeliverLogsPermissionArn: !Sub arn:aws:iam::${AWS::AccountId}:role/vpc-flow-log-role
+
   myInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -65,7 +97,7 @@ Resources:
       VpcId: !Ref VpcId
       AvailabilityZone: !Select [0, !GetAZs ""]
       CidrBlock: !Ref PublicSubnet1CIDR
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: myPublicSubnet1
@@ -76,7 +108,7 @@ Resources:
       VpcId: !Ref VpcId
       CidrBlock: !Ref PublicSubnet2CIDR
       AvailabilityZone: !Select [1, !GetAZs ""]
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: myPublicSubnet2
@@ -109,24 +141,45 @@ Resources:
       SubnetId: !Ref myPublicSubnet2
       RouteTableId: !Ref myRouteTable
 
-  InstanceSecurityGroup:
+  ELBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    Metadata:
+      guard:
+        SuppressedRules:
+          - EC2_SECURITY_GROUP_INGRESS_OPEN_TO_WORLD_RULE # Internet-facing ALB requires open ingress
+          - SECURITY_GROUP_INGRESS_CIDR_NON_32_RULE # ALB accepts traffic from any IP
     Properties:
-      GroupDescription: Enable SSH access via port 22
+      GroupDescription: "ELB Security Group"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
+          Description: "HTTPS from Internet"
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP from Internet"
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Enable application access"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8501
           ToPort: 8501
-          CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref ELBSecurityGroup
+          Description: "Application access from ALB"
       SecurityGroupEgress:
-        - Description: Allow all outbound traffic
-          IpProtocol: "-1"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
+          Description: "Allow outbound HTTPS traffic"
 
   QManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -236,7 +289,7 @@ Resources:
           "AmazonQAppId": "${QApplicationId}",
           "IamRoleArn": "${QServiceRole.Arn}",
           "Region": "${AWS::Region}",
-          "IdcApplicationArn": "${IdCApplicationARN}",
+          "IdcApplicationArn": "${IdcApplicationArn}",
           "OAuthConfig": {
             "ClientId": "${UserPoolClient}",
             "ExternalDns": "${LowerCaseFqdn.Output}",
@@ -261,29 +314,6 @@ Resources:
       Name: "Quick deployment"
       ReplicateTo: "NONE"
       GrowthType: "LINEAR"
-  # EC2 and ALB Security Groups
-  ELBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Metadata:
-      guard:
-        SuppressedRules:
-          - EC2_SECURITY_GROUP_INGRESS_OPEN_TO_WORLD_RULE # This SG only applies to Internet facing ALB
-          - SECURITY_GROUP_INGRESS_CIDR_NON_32_RULE
-          - SECURITY_GROUP_MISSING_EGRESS_RULE
-    Properties:
-      GroupDescription: ELB Security Group
-      VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: HTTPS from Internet
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-          Description: HTTP from Internet
 
   ELBSecurityGroupEgress:
     Type: AWS::EC2::SecurityGroupEgress
@@ -297,19 +327,21 @@ Resources:
 
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
-    Metadata:
-      guard:
-        SuppressedRules:
-          - SECURITY_GROUP_MISSING_EGRESS_RULE
     Properties:
-      GroupDescription: EC2 Security group
+      GroupDescription: "EC2 Security group"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
           SourceSecurityGroupId: !Ref ELBSecurityGroup
-          Description: Allow inbound traffic from ALB
+          Description: "Allow inbound traffic from ALB"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "Allow outbound HTTPS traffic"
 
   SecurityGroupEgress:
     Type: AWS::EC2::SecurityGroupEgress
@@ -364,7 +396,7 @@ Resources:
             Groups:
               - !Ref SecurityGroup
         EbsOptimized: true
-        ImageId: !Ref "LatestAMIID"
+        ImageId: !Ref "LatestAmiId"
         InstanceType: t3.micro
         IamInstanceProfile:
           Arn: !GetAtt EC2InstanceProfile.Arn
@@ -410,8 +442,8 @@ Resources:
             systemctl enable aws-appconfig-agent
             systemctl restart aws-appconfig-agent
             cd /opt
-            git clone https://github.com/atl-code/q-business-custom-webapp.git
-            cd q-business-custom-webapp/
+            git clone https://github.com/mohsinidrees2817/custom-web-experience-with-amazon-q-business.git
+            cd custom-web-experience-with-amazon-q-business/
             pip3.11 install virtualenv
             python3.11 -m virtualenv venv
             venv/bin/pip install -r requirements.txt
@@ -438,6 +470,10 @@ Resources:
 
   UserPool:
     Type: AWS::Cognito::UserPool
+    Metadata:
+      guard:
+        SuppressedRules:
+          - COGNITO_USER_POOL_MFA_CONFIGURATION_RULE # Not required for the demo
     Properties:
       UserPoolName: !Sub ${AuthName}-user-pool
       AutoVerifiedAttributes:
@@ -491,36 +527,10 @@ Resources:
           TargetGroupArn: !Ref EC2TargetGroup
           Order: 1
 
-  ALBListener80:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Metadata:
-      guard:
-        SuppressedRules:
-          - ELBV2_LISTENER_PROTOCOL_RULE # Not required for the demo
-          - ELBV2_LISTENER_SSL_POLICY_RULE # NO SSL Policy for an HTTP listener
-    Properties:
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
-      Port: 80
-      Protocol: HTTP
-      DefaultActions:
-        - Order: 1
-          RedirectConfig:
-            Protocol: "HTTPS"
-            Port: "443"
-            Host: "#{host}"
-            Path: "/#{path}"
-            Query: "#{query}"
-            StatusCode: "HTTP_301"
-          Type: "redirect"
-
   ApplicationLoadBalancer:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Metadata:
-      guard:
-        SuppressedRules:
-          - ELB_DELETION_PROTECTION_ENABLED # Not required for the demo
-          - ELBV2_ACCESS_LOGGING_RULE # Not required for the demo
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
     Properties:
+      Name: "my-alb"
       Scheme: internet-facing
       Subnets:
         - !Ref myPublicSubnet1
@@ -540,7 +550,7 @@ Resources:
       guard:
         SuppressedRules:
           - LAMBDA_DLQ_CHECK # This a synchronous call no need for DLQ
-          - LAMBDA_INSIDE_VPC # No need for VPC
+          - LAMBDA_INSIDE_VPC # The function doesn't access VPC resources; deploying outside VPC reduces complexity.
           - LAMBDA_CONCURRENCY_CHECK # Not required for the demo
     Properties:
       Handler: index.handler
@@ -567,6 +577,7 @@ Resources:
               cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
       Runtime: python3.12
       Timeout: 60
+      ReservedConcurrentExecutions: 5
 
   LowerCaseRole:
     Type: AWS::IAM::Role
