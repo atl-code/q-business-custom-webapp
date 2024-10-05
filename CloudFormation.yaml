@@ -1,5 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "CloudFormation for the Custom UI of QBusiness"
+
 Parameters:
   LatestAmiId:
     Description: EC2 machine image
@@ -36,7 +37,9 @@ Parameters:
     Default: 10.0.2.0/24
     Description: Please enter CIDR for Public Subnet 2
 
+
 Resources:
+
   VpcId:
     Type: AWS::EC2::VPC
     Properties:
@@ -547,12 +550,20 @@ Resources:
       LogoutURLs:
         - !Sub "https://${LowerCaseFqdn.Output}"
 
+ 
+
+  
   UserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
       UserPoolId: !Ref UserPool
-      Domain: !Sub ${AuthName}-dns-testname
-
+      Domain: !Sub
+        - "myuserpool-${UniqueNumber}"
+        - UniqueNumber: !Sub
+          - "${StackNumber}"
+          - StackNumber: !Select [2, !Split ["/", !Ref "AWS::StackId"]]
+            
+                
   ALBListener2:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Metadata:
